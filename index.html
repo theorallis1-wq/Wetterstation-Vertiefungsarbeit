@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wetterstationen Vergleich – Arduino vs. Raspberry Pi 5</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        header { text-align: center; margin-bottom: 28px; }
+        h1 { font-size: 1.9rem; margin: 0 0 6px 0; }
+        .subtitle { color: #94a3b8; font-size: 0.95rem; }
+        
+        .comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 28px; }
+        @media (max-width: 768px) { .comparison-grid { grid-template-columns: 1fr; } }
+
+        .station-col { background: #1e293b; border-radius: 16px; padding: 24px; border: 2px solid #334155; }
+        .station-arduino { border-top: 5px solid #38bdf8; }
+        .station-pi { border-top: 5px solid #f59e0b; }
+
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px; }
+        .badge-budget { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+        .badge-premium { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+
+        .station-title { font-size: 1.4rem; margin: 0 0 20px 0; }
+        .metrics-list { display: grid; gap: 12px; }
+        .metric-box { background: #0f172a; padding: 14px 16px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #1e293b; }
+        .metric-label { color: #94a3b8; font-size: 0.95rem; }
+        .metric-value { font-size: 1.35rem; font-weight: 700; }
+
+        .timestamp { margin-top: 16px; font-size: 0.85rem; color: #64748b; text-align: right; }
+        .empty-state { color: #64748b; font-style: italic; padding: 20px 0; }
+
+        .chart-box { background: #1e293b; border-radius: 16px; padding: 24px; border: 1px solid #334155; }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+        .chart-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 18px; }
+        .chart-title { margin: 0; font-size: 1.15rem; color: #e2e8f0; }
+        
+        .selector-group { display: flex; flex-wrap: wrap; gap: 6px; background: #0f172a; padding: 6px; border-radius: 10px; border: 1px solid #334155; }
+        .sel-btn { background: transparent; color: #94a3b8; border: none; padding: 7px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all 0.2s; }
+        .sel-btn:hover { color: #f8fafc; }
+        .metric-btn.active { background: #38bdf8; color: #0f172a; }
+        .range-btn.active { background: #f59e0b; color: #0f172a; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🌤️ Wetterstationen Live-Vergleich</h1>
+            <div class="subtitle">Arduino (Low-Budget) vs. Raspberry Pi 5 (High-End)</div>
+        </header>
+
+        <div class="comparison-grid">
+            <div class="station-col station-arduino">
+                <span class="badge badge-budget">Low-Budget Setup</span>
+                <h2 class="station-title">Arduino Station</h2>
+                <div id="arduino-content" class="empty-state">Warte auf Daten...</div>
+            </div>
+
+            <div class="station-col station-pi">
+                <span class="badge badge-premium">High-End Setup</span>
+                <h2 class="station-title">Raspberry Pi 5 Station</h2>
+                <div id="pi-content" class="empty-state">Warte auf Daten...</div>
+            </div>
+        </div>
+
+        <div class="chart-box">
+            <div class="chart-header">
+                <h3 id="chart-heading" class="chart-title">📈 Verlauf: Temperatur (°C) – Live</h3>
+            </div>
+            <div class="chart-controls">
+                <div class="selector-group">
+                    <button class="sel-btn metric-btn active" onclick="switchMetric('temperature', this)">🌡️ Temperatur</button>
+                    <button class="sel-btn metric-btn" onclick="switchMetric('humidity', this)">💧 Luftfeuchte</button>
+                    <button class="sel-btn metric-btn" onclick="switchMetric('uv', this)">☀️ UV-Index</button>
+                    <button class="sel-btn metric-btn" onclick="switchMetric('wind', this)">💨 Wind</button>
+                    <button class="sel-btn metric-btn" onclick="switchMetric('rain', this)">🌧️ Regen</button>
+                </div>
+
+                <div class="selector-group">
+                    <button class="sel-btn range-btn active" onclick="switchRange('live', this)">🔴 Live</button>
+                    <button class="sel-btn range-btn" onclick="switchRange('24h', this)">24h</button>
+                    <button class="sel-btn range-btn" onclick="switchRange('7d', this)">7 Tage</button>
+                    <button class="sel-btn range-btn" onclick="switchRange('30d', this)">30 Tage</button>
+                </div>
+            </div>
+            <canvas id="comparisonChart" height="95"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const ARDUINO_ID = "Arduino-Station";
+        const PI_ID = "Pi5-Station";
+
+        const METRIC_CONFIG = {
+            temperature: { label: "Temperatur", unit: "°C" },
+            humidity:    { label: "Luftfeuchtigkeit", unit: "%" },
+            uv:          { label: "UV-Strahlung", unit: "UV-Index" },
+            wind:        { label: "Windgeschwindigkeit", unit: "km/h" },
+            rain:        { label: "Niederschlag", unit: "mm" }
+        };
+
+        const RANGE_LABELS = {
+            live: "Live (Letzte Messungen)",
+            "24h": "Letzte 24 Stunden",
+            "7d": "Letzte 7 Tage",
+            "30d": "Letzte 30 Tage"
+        };
+
+        let currentMetric = "temperature";
+        let currentRange = "live";
+        let cachedHistory = [];
+        let chart;
+
+        function renderStation(elementId, s) {
+            const container = document.getElementById(elementId);
+            if (!s) {
+                container.innerHTML = `<div class="empty-state">Noch keine Messwerte empfangen.</div>`;
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="metrics-list">
+                    <div class="metric-box">
+                        <span class="metric-label">🌡️ Temperatur</span>
+                        <span class="metric-value">${s.temperature ?? '–'} °C</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="metric-label">💧 Luftfeuchtigkeit</span>
+                        <span class="metric-value">${s.humidity ?? '–'} %</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="metric-label">☀️ UV-Index</span>
+                        <span class="metric-value">${s.uv ?? '–'}</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="metric-label">💨 Wind</span>
+                        <span class="metric-value">${s.wind ?? '–'} km/h</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="metric-label">🌧️ Regen</span>
+                        <span class="metric-value">${s.rain ?? '–'} mm</span>
+                    </div>
+                </div>
+                <div class="timestamp">Zuletzt aktualisiert: ${s.time_str} Uhr</div>
+            `;
+        }
+
+        function switchMetric(metricKey, btnElement) {
+            currentMetric = metricKey;
+            document.querySelectorAll('.metric-btn').forEach(b => b.classList.remove('active'));
+            btnElement.classList.add('active');
+            updateChart();
+        }
+
+        function switchRange(rangeKey, btnElement) {
+            currentRange = rangeKey;
+            document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+            btnElement.classList.add('active');
+            loadData();
+        }
+
+        function updateChart() {
+            const cfg = METRIC_CONFIG[currentMetric];
+            const rLabel = RANGE_LABELS[currentRange];
+            document.getElementById('chart-heading').innerText = `📈 Verlauf: ${cfg.label} (${cfg.unit}) – ${rLabel}`;
+
+            const labels = [...new Set(cachedHistory.map(item => item.time_str))];
+
+            const arduinoMap = {};
+            const piMap = {};
+            cachedHistory.forEach(item => {
+                if (item.station_id === ARDUINO_ID) arduinoMap[item.time_str] = Number(item[currentMetric]);
+                if (item.station_id === PI_ID)      piMap[item.time_str]      = Number(item[currentMetric]);
+            });
+
+            const arduinoData = labels.map(time => arduinoMap[time] ?? null);
+            const piData      = labels.map(time => piMap[time] ?? null);
+
+            const datasets = [
+                {
+                    label: `Arduino (Günstig) [${cfg.unit}]`,
+                    data: arduinoData,
+                    borderColor: '#38bdf8',
+                    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                    tension: 0.3,
+                    spanGaps: true
+                },
+                {
+                    label: `Raspberry Pi 5 (Teuer) [${cfg.unit}]`,
+                    data: piData,
+                    borderColor: '#f59e0b',
+                    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                    tension: 0.3,
+                    spanGaps: true
+                }
+            ];
+
+            if (!chart) {
+                chart = new Chart(document.getElementById('comparisonChart'), {
+                    type: 'line',
+                    data: { labels, datasets },
+                    options: {
+                        plugins: { legend: { labels: { color: '#f8fafc' } } },
+                        scales: {
+                            x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
+                            y: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } }
+                        }
+                    }
+                });
+            } else {
+                chart.data.labels = labels;
+                chart.data.datasets = datasets;
+                chart.update();
+            }
+        }
+
+        async function loadData() {
+            try {
+                const res = await fetch(`/api/measurements?range=${currentRange}`);
+                const data = await res.json();
+
+                renderStation('arduino-content', data.latest.find(s => s.station_id === ARDUINO_ID));
+                renderStation('pi-content', data.latest.find(s => s.station_id === PI_ID));
+
+                cachedHistory = data.history;
+                updateChart();
+            } catch (err) {
+                console.error("Fehler beim Laden der API-Daten:", err);
+            }
+        }
+
+        loadData();
+        setInterval(loadData, 10000);
+    </script>
+</body>
+</html>
